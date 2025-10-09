@@ -86,6 +86,20 @@ if __name__ == "__main__":
         type=str,
         default="The Alvarez hypothesis posits that the mass extinction of the dinosaurs and many other living things during the Cretaceous-Paleogene extinction event",
     )
+    parser.add_argument(
+        "--chars-per-bit",
+        "-c",
+        type=int,
+        default=32,
+        help="The number of characters used to encode each bit",
+    )
+    parser.add_argument(
+        "--message",
+        "-m",
+        type=str,
+        default="hello",
+        help="The message to encode in the LLM output",
+    )
 
     args = parser.parse_args()
 
@@ -93,7 +107,7 @@ if __name__ == "__main__":
 
     llm = Llama(model_path=args.model_path, verbose=False, n_ctx=0)
 
-    bitstring = b"hello"
+    bitstring = args.message.encode()
 
-    message = encode_bitstring(llm, args.prompt, bitstring, h, 32)
+    message = encode_bitstring(llm, args.prompt, bitstring, h, args.chars_per_bit)
     print("~~~~~~~\nMessage:\n~~~~~~~\n", message)
