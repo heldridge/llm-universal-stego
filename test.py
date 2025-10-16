@@ -162,12 +162,16 @@ if __name__ == "__main__":
     chars_per_bit_i = 32
     print("chars_per_bit_i: ", chars_per_bit_i)
 
-    try:
-        # Code that might raise a SystemError
-        message = encode_bitstring(llm, args.prompt, bitstring, h, chars_per_bit_i)
-    except SystemError as e:
-        # Handle the SystemError
-        message = encode_bitstring(llm, args.prompt, bitstring, h, chars_per_bit_i)
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            message = encode_bitstring(llm, args.prompt, bitstring, h, chars_per_bit_i)
+            break  # Exit the loop if successful
+        except SystemError as e:
+            print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt == max_retries - 1:
+                print("Max retries reached. Raising exception.")
+                raise  # Re-raise the exception after max retries
 
 
     print("~~~~~~~\nMessage:\n~~~~~~~\n", message)
