@@ -6,8 +6,14 @@ import blessed
 from llama_cpp import Llama
 
 import timeit
+from cryptography.hazmat.primitives.asymmetric import x25519
+from cryptography.hazmat.primitives import serialization
+
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 term = blessed.Terminal()
+
 
 
 def iter_bits(data: bytes):
@@ -37,12 +43,16 @@ def get_next_tokens(
     increment = 0
     base_output = term.home + term.clear + message
     while True:
-        if increment > 50:
+        if increment > 100:
             raise SystemError("Giving up after trying to generate next token with desired hash.")            
 
         modified_base = base_output + f"attempt {increment + 1}\n"
 
-        result = llm(prompt, max_tokens=num_chars, seed=seed + increment)
+        result = llm(prompt, max_tokens=num_chars, seed=seed + increment,
+                     #min_p=0.05,  # Minimum probability threshold
+                     temperature=1.3,  # Add some randomness
+                     repeat_penalty=1.2  # Discourage repetition
+                     )
         output = result["choices"][0]["text"]
         if len(output) >= num_chars:
             final_str = output[:num_chars]
@@ -123,6 +133,7 @@ def decode_bitstring(
         bits.append(bit)
         data = data[chars_per_bit:]
 
+    print("bits: ", bits)
     # Convert list of bits to bytes
     decoded_bytes = bytearray()
     for b in range(0, len(bits), 8):
@@ -135,7 +146,7 @@ def decode_bitstring(
         decoded_bytes.append(byte)
 
     # Remove possible trailing null bytes (if the message was padded)
-    return decoded_bytes.rstrip(b"\x00").decode(errors="replace")
+    return (decoded_bytes, decoded_bytes.rstrip(b"\x00").decode(errors="replace"))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -147,20 +158,83 @@ if __name__ == "__main__":
         default="The Alvarez hypothesis posits that the mass extinction of the dinosaurs and many other living things during the Cretaceous-Paleogene extinction event",
     )
 
+    ##############################
+
+    # Alice generates her private key
+    alice_private_key = x25519.X25519PrivateKey.generate()
+    alice_public_key = alice_private_key.public_key()
+
+    # Bob generates his private key
+    bob_private_key = x25519.X25519PrivateKey.generate()
+    bob_public_key = bob_private_key.public_key()
+
+    # Alice computes the shared secret using Bob's public key
+    alice_shared_secret = alice_private_key.exchange(bob_public_key)
+
+    # Bob computes the shared secret using Alice's public key
+    bob_shared_secret = bob_private_key.exchange(alice_public_key)
+
+    # Both shared secrets are identical
+    assert alice_shared_secret == bob_shared_secret
+
+    # Derive key using HKDF
+    kdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b'prf-key',
+    )
+    prf_key = kdf.derive(alice_shared_secret)
+
+    print(f"PRF Key: {prf_key.hex()}")
+
+    # PRF evaluation at input 0 using HMAC-SHA256
+    # PRF(key, input) = HMAC-SHA256(key, input)
+    prf = hmac.HMAC(prf_key, hashes.SHA256())
+    prf.update(b'\x00')  # Input = 0 as a single byte
+    prf_output = prf.finalize()
+
+    print(f"PRF(key, 0): {prf_output.hex()}")
+    print(f"PRF output length: {len(prf_output)} bytes")
+
+    concatenated_key_prf_out = b''.join([prf_key, prf_output])
+
+    # Extract prf_key (first 32 bytes)
+    extracted_prf_key = concatenated_key_prf_out[:32]
+
+    # Extract prf_output (next 32 bytes)
+    extracted_prf_output = concatenated_key_prf_out[32:64]
+    # Or simply: concatenated[32:]
+
+    # Verify they match the originals
+    assert extracted_prf_key == prf_key
+    assert extracted_prf_output == prf_output
+    prf_i = hmac.HMAC(extracted_prf_key, hashes.SHA256())
+    prf_i.update(b'\x00')  # Input = 0 as a single byte
+    prf_output_i = prf_i.finalize()
+    assert extracted_prf_output == prf_output_i
+
+    ###########################################
+
     args = parser.parse_args()
 
     h = hashlib.sha256
 
-    llm = Llama(model_path=args.model_path, verbose=False, n_ctx=0, device="cuda:0")
-
     #bitstring = b"hello"
     bitstring = b"abcdefg"
+    print("bitstring type: ", type(bitstring))
+
+    # replacing test bitstring with the key and prf eval of 0
+    bitstring = concatenated_key_prf_out
+    print("new bitstring type: ", type(bitstring))
 
     print("message to encode: " + str(bitstring))
     print("length: ", len(bitstring))
 
     chars_per_bit_i = 32
     print("chars_per_bit_i: ", chars_per_bit_i)
+
+    llm = Llama(model_path=args.model_path, verbose=False, n_ctx=0, device="cuda:0")
 
     max_retries = 10
     for attempt in range(max_retries):
@@ -178,7 +252,7 @@ if __name__ == "__main__":
 
     # --- Decode the message back ---
     num_bits = len(bitstring) * 8
-    decoded = decode_bitstring(
+    (decoded_bytes, decoded) = decode_bitstring(
         message,
         args.prompt,
         h,
@@ -186,3 +260,5 @@ if __name__ == "__main__":
         chars_per_bit_i
     )
     print("~~~~~~~\nDecoded message:\n~~~~~~~\n", decoded)
+
+    assert decoded_bytes == bitstring
