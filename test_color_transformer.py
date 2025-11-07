@@ -12,10 +12,7 @@ from accelerate import infer_auto_device_map, init_empty_weights
 # Replaced blessed with colorama
 from colorama import init, Fore, Style
 
-from cryptography.hazmat.primitives.asymmetric import x25519
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+import utils
 
 # Initialize colorama
 init(autoreset=True)
@@ -198,12 +195,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # --- Key Exchange and PRF (Unchanged) ---
-    alice_private_key = x25519.X25519PrivateKey.generate()
-    bob_private_key = x25519.X25519PrivateKey.generate()
-    alice_shared_secret = alice_private_key.exchange(bob_private_key.public_key())
-    kdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b'prf-key')
-    prf_key = kdf.derive(alice_shared_secret)
+
 
     # --- Message to encode ---
     h = hashlib.sha256
@@ -212,8 +204,8 @@ if __name__ == "__main__":
     bitstring = b"abcdefg"
     bitstring = b"abc"
 
-    # replacing test bitstring with the key and prf eval of 0
-    # bitstring = concatenated_key_prf_out
+    # replacing test bitstring with the elligator key exchange
+    # bitstring = utils.gen_elligator_bitstring()
     print("new bitstring type: ", type(bitstring))
 
     print("message to encode: " + str(bitstring))

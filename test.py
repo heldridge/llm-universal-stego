@@ -6,11 +6,8 @@ import blessed
 from llama_cpp import Llama
 
 import timeit
-from cryptography.hazmat.primitives.asymmetric import x25519
-from cryptography.hazmat.primitives import serialization
 
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+import utils
 
 term = blessed.Terminal()
 
@@ -158,74 +155,17 @@ if __name__ == "__main__":
         default="The Alvarez hypothesis posits that the mass extinction of the dinosaurs and many other living things during the Cretaceous-Paleogene extinction event",
     )
 
-    ##############################
-
-    # Alice generates her private key
-    alice_private_key = x25519.X25519PrivateKey.generate()
-    alice_public_key = alice_private_key.public_key()
-
-    # Bob generates his private key
-    bob_private_key = x25519.X25519PrivateKey.generate()
-    bob_public_key = bob_private_key.public_key()
-
-    # Alice computes the shared secret using Bob's public key
-    alice_shared_secret = alice_private_key.exchange(bob_public_key)
-
-    # Bob computes the shared secret using Alice's public key
-    bob_shared_secret = bob_private_key.exchange(alice_public_key)
-
-    # Both shared secrets are identical
-    assert alice_shared_secret == bob_shared_secret
-
-    # Derive key using HKDF
-    kdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=b'prf-key',
-    )
-    prf_key = kdf.derive(alice_shared_secret)
-
-    print(f"PRF Key: {prf_key.hex()}")
-
-    # PRF evaluation at input 0 using HMAC-SHA256
-    # PRF(key, input) = HMAC-SHA256(key, input)
-    prf = hmac.HMAC(prf_key, hashes.SHA256())
-    prf.update(b'\x00')  # Input = 0 as a single byte
-    prf_output = prf.finalize()
-
-    print(f"PRF(key, 0): {prf_output.hex()}")
-    print(f"PRF output length: {len(prf_output)} bytes")
-
-    concatenated_key_prf_out = b''.join([prf_key, prf_output])
-
-    # Extract prf_key (first 32 bytes)
-    extracted_prf_key = concatenated_key_prf_out[:32]
-
-    # Extract prf_output (next 32 bytes)
-    extracted_prf_output = concatenated_key_prf_out[32:64]
-    # Or simply: concatenated[32:]
-
-    # Verify they match the originals
-    assert extracted_prf_key == prf_key
-    assert extracted_prf_output == prf_output
-    prf_i = hmac.HMAC(extracted_prf_key, hashes.SHA256())
-    prf_i.update(b'\x00')  # Input = 0 as a single byte
-    prf_output_i = prf_i.finalize()
-    assert extracted_prf_output == prf_output_i
-
-    ###########################################
 
     args = parser.parse_args()
 
     h = hashlib.sha256
 
     #bitstring = b"hello"
-    bitstring = b"abcdefg"
-    print("bitstring type: ", type(bitstring))
+    # bitstring = b"abcdefg"
+    # print("bitstring type: ", type(bitstring))
 
-    # replacing test bitstring with the key and prf eval of 0
-    bitstring = concatenated_key_prf_out
+    # replacing test bitstring with the elligator key exchange
+    bitstring = utils.gen_elligator_bitstring()
     print("new bitstring type: ", type(bitstring))
 
     print("message to encode: " + str(bitstring))
