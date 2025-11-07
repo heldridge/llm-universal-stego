@@ -8,7 +8,6 @@ dependencies = [
     "accelerate>=1.11.0",
     "blessed>=1.23.0",
     "colorama>=0.4.6",
-    "cryptography>=46.0.3",
     "llama-cpp-python>=0.3.16",
     "pymonocypher>=4.0.2.5",
     "transformers>=4.57.1",
