@@ -2,11 +2,10 @@ import argparse
 import hashlib
 import random
 
-#import blessed
+# import blessed
 # Replace blessed with colorama
 from colorama import init, Fore, Style
 import os
-
 
 from llama_cpp import Llama
 
@@ -17,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-#term = blessed.Terminal()
+# term = blessed.Terminal()
 
 # Initialize colorama
 init(autoreset=True)
@@ -57,6 +56,7 @@ class Terminal:
 
 term = Terminal()
 
+
 def iter_bits(data: bytes):
     """
     Iterate over every bit in a bytes object.
@@ -78,9 +78,9 @@ def first_bit_of_hash(h, b: bytes) -> int:
 
 
 def get_next_tokens(
-    llm: Llama, prompt: str, target_bit: int, h, num_chars=16, message="",
-) -> str:
-    seed = random.randint(0, 2**64)
+        llm: Llama, prompt: str, target_bit: int, h, num_tokens=8, message="",
+) -> tuple:
+    seed = random.randint(0, 2 ** 64)
     increment = 0
     base_output = term.home + term.clear + message
     while True:
@@ -89,92 +89,118 @@ def get_next_tokens(
 
         modified_base = base_output + f"attempt {increment + 1}\n"
 
-        result = llm(prompt, max_tokens=num_chars, seed=seed + increment,
-                     #min_p=0.05,  # Minimum probability threshold
-                     temperature=1.3,  # Add some randomness
-                     repeat_penalty=1.2  # Discourage repetition
+        result = llm(prompt, max_tokens=num_tokens, seed=seed + increment,
+                     temperature=1.3,
+                     repeat_penalty=1.2
                      )
-        
-        output = result["choices"][0]["text"]
-        if len(output) >= num_chars:
-            final_str = output[:num_chars]
 
-            hash_works = first_bit_of_hash(h, final_str.encode()) == target_bit
+        output = result["choices"][0]["text"]
+
+        # Tokenize the output to get exact token IDs
+        output_tokens = llm.tokenize(output.encode('utf-8'))
+
+        if len(output_tokens) >= num_tokens:
+            # Use exactly num_tokens worth of tokens
+            selected_tokens = output_tokens[:num_tokens]
+
+            # Convert token IDs to bytes for hashing
+            token_bytes = b''.join(str(tid).encode() for tid in selected_tokens)
+
+            hash_works = first_bit_of_hash(h, token_bytes) == target_bit
 
             if hash_works:
-                print(modified_base + prompt + term.green(final_str))
-                return (final_str, increment+1)
+                print(modified_base + prompt + term.green(output))
+                return (output, increment + 1, selected_tokens)
             else:
-                print(modified_base + prompt + term.red(final_str))
+                print(modified_base + prompt + term.red(output))
 
         increment += 1
 
 
 def encode_bitstring(
-    llm: Llama, initial_prompt: str, bitstring: bytes, h, chars_per_bit=16
-) -> str:
+        llm: Llama, initial_prompt: str, bitstring: bytes, h, tokens_per_bit=8
+) -> tuple:
+    """
+    Encode a bitstring into LLM output using tokens.
+
+    Args:
+        llm: The language model
+        initial_prompt: Starting prompt
+        bitstring: Data to encode
+        h: Hash function
+        tokens_per_bit: Number of tokens to use per bit
+
+    Returns:
+        tuple: (encoded_message, token_map)
+    """
     current_prompt = initial_prompt
     total_tries = 0
+    token_map = []  # Store token IDs for each bit
 
     start_time = timeit.default_timer()
 
-
     with term.fullscreen(), term.cbreak():
         base_output = (
-            term.home + term.clear + f"bit 1/{len(bitstring)*8}\t\t" + f"attempt {0}\n"
+                term.home + term.clear + f"bit 1/{len(bitstring) * 8}\t\t" + f"attempt {0}\n"
         )
         print(base_output + initial_prompt)
         for index, bit in enumerate(iter_bits(bitstring)):
-            (next_prompt, tries) = get_next_tokens(
+            (next_prompt, tries, tokens) = get_next_tokens(
                 llm,
                 current_prompt,
                 bit,
                 h,
-                chars_per_bit,
+                tokens_per_bit,
                 message=f"bit {index + 1}/{len(bitstring) * 8}\t\t",
             )
             current_prompt += next_prompt
+            token_map.append(tokens)
             total_tries += tries
 
     end_time = timeit.default_timer()
 
     print(f"Elapsed: {round((end_time - start_time) * 1e6, 3)} µs")
     print(f"Elapsed: {round((end_time - start_time) * 1e3, 3)} ms")
-    print(f"Elapsed: {round((end_time - start_time), 3)} s")
-    print(f"Elapsed per next token gen: {round((end_time - start_time) * 1e3/total_tries, 3)} ms")
+    print(f"Elapsed per next token gen: {round((end_time - start_time) * 1e3 / total_tries, 3)} ms")
 
     print("total_tries: ", total_tries)
     print("len(bitstring): ", len(bitstring))
-    print("avg try: ", total_tries/(len(bitstring)*8))
-    return current_prompt
+    print("avg try: ", total_tries / (len(bitstring) * 8))
+    return (current_prompt, token_map)
+
 
 def decode_bitstring(
-    encoded_message: str, initial_prompt: str, h, num_bits: int, chars_per_bit=16
-) -> str:
+        encoded_message: str, initial_prompt: str, h, num_bits: int, token_map: list
+) -> tuple:
     """
-    Decodes a bitstring from the encoded LLM output.
+    Decodes a bitstring from the encoded LLM output using token information.
 
     Args:
         encoded_message (str): The full message output from the LLM after encoding.
         initial_prompt (str): The prompt that was used to generate the message.
         h: The hash function used to encode/decode bits.
         num_bits (int): The number of bits to decode.
-        chars_per_bit (int): The number of characters per encoded bit.
+        token_map (list): List of token ID sequences for each bit.
 
     Returns:
-        str: The decoded message as a string.
+        tuple: (decoded_bytes, decoded_string)
     """
     # Remove the initial prompt from the encoded message
     if not encoded_message.startswith(initial_prompt):
         raise ValueError("Encoded message does not start with the initial prompt.")
-    data = encoded_message[len(initial_prompt):]
+
     bits = []
 
     for i in range(num_bits):
-        chunk = data[:chars_per_bit]
-        bit = first_bit_of_hash(h, chunk.encode())
+        if i >= len(token_map):
+            raise ValueError(f"Token map doesn't have enough entries for {num_bits} bits")
+
+        tokens = token_map[i]
+
+        # Convert token IDs to bytes for hashing (same as in encoding)
+        token_bytes = b''.join(str(tid).encode() for tid in tokens)
+        bit = first_bit_of_hash(h, token_bytes)
         bits.append(bit)
-        data = data[chars_per_bit:]
 
     print("bits: ", bits)
     # Convert list of bits to bytes
@@ -190,6 +216,7 @@ def decode_bitstring(
 
     # Remove possible trailing null bytes (if the message was padded)
     return (decoded_bytes, decoded_bytes.rstrip(b"\x00").decode(errors="replace"))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -263,52 +290,49 @@ if __name__ == "__main__":
 
     h = hashlib.sha256
 
-    #bitstring = b"hello"
+    # bitstring = b"hello"
     bitstring = b"abcdefg"
     bitstring = b"abc"
     print("bitstring type: ", type(bitstring))
 
     # replacing test bitstring with the key and prf eval of 0
-    #bitstring = concatenated_key_prf_out
+    # bitstring = concatenated_key_prf_out
     print("new bitstring type: ", type(bitstring))
 
     print("message to encode: " + str(bitstring))
     print("length: ", len(bitstring))
 
-    chars_per_bit_i = 32
-    print("chars_per_bit_i: ", chars_per_bit_i)
-
-    n_ctx_needed = int(((len(args.prompt) + len(bitstring))* 8 * 32 / 3.5) + 100)
-    print("n_ctx_needed: ", n_ctx_needed)
+    tokens_per_bit_i = 16  # Changed from chars_per_bit_i
+    print("tokens_per_bit_i: ", tokens_per_bit_i)
 
     # llm = Llama(model_path=args.model_path, verbose=False, n_ctx=0, device="cuda:0")
     # llm = Llama(model_path=args.model_path, n_gpu_layers=-1, verbose=False, n_threads=8, n_batch=512, use_mmap=True,  use_mlock=False,)
-    #llm = Llama(model_path=args.model_path, n_gpu_layers=30, verbose=True, n_threads=8, n_ctx=0, use_mmap=True,  use_mlock=False,device="cuda:0")
+    # llm = Llama(model_path=args.model_path, n_gpu_layers=30, verbose=True, n_threads=8, n_ctx=0, use_mmap=True,  use_mlock=False,device="cuda:0")
     llm = Llama(
         model_path=args.model_path,
         n_gpu_layers=-1,  # Offload all possible layers
         verbose=True,
-        n_threads=12,  # Good for CPU fallback
-        #n_ctx=0,
-        n_ctx=n_ctx_needed,
-        n_batch=512,
+        n_threads=8,  # Good for CPU fallback
+        n_ctx=0,
         use_mmap=True,  # Good for large models
         use_mlock=False,  # Keep False to avoid memory issues
-        device="cuda:0"
+        #logits_all=True,
+        device = "cuda:0",
     )
     print("model loaded")
 
     max_retries = 10
+    message = None
+    token_map = None
     for attempt in range(max_retries):
         try:
-            message = encode_bitstring(llm, args.prompt, bitstring, h, chars_per_bit_i)
+            (message, token_map) = encode_bitstring(llm, args.prompt, bitstring, h, tokens_per_bit_i)
             break  # Exit the loop if successful
         except SystemError as e:
             print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
             if attempt == max_retries - 1:
                 print("Max retries reached. Raising exception.")
                 raise  # Re-raise the exception after max retries
-
 
     print("~~~~~~~\nMessage:\n~~~~~~~\n", message)
 
@@ -319,7 +343,7 @@ if __name__ == "__main__":
         args.prompt,
         h,
         num_bits,
-        chars_per_bit_i
+        token_map  # Pass the token map instead of tokens_per_bit
     )
     print("~~~~~~~\nDecoded message:\n~~~~~~~\n", decoded)
 
