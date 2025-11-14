@@ -10,12 +10,7 @@ import os
 from llama_cpp import Llama
 
 import timeit
-from cryptography.hazmat.primitives.asymmetric import x25519
-from cryptography.hazmat.primitives import serialization
-
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
+import utils
 # term = blessed.Terminal()
 
 # Initialize colorama
@@ -119,7 +114,7 @@ def get_next_tokens(
 
 def encode_bitstring(
         llm: Llama, initial_prompt: str, bitstring: bytes, h, tokens_per_bit=8
-) -> tuple:
+) -> str:
     """
     Encode a bitstring into LLM output using tokens.
 
@@ -131,11 +126,10 @@ def encode_bitstring(
         tokens_per_bit: Number of tokens to use per bit
 
     Returns:
-        tuple: (encoded_message, token_map)
+        str: The encoded message
     """
     current_prompt = initial_prompt
     total_tries = 0
-    token_map = []  # Store token IDs for each bit
 
     start_time = timeit.default_timer()
 
@@ -154,7 +148,6 @@ def encode_bitstring(
                 message=f"bit {index + 1}/{len(bitstring) * 8}\t\t",
             )
             current_prompt += next_prompt
-            token_map.append(tokens)
             total_tries += tries
 
     end_time = timeit.default_timer()
@@ -166,21 +159,28 @@ def encode_bitstring(
     print("total_tries: ", total_tries)
     print("len(bitstring): ", len(bitstring))
     print("avg try: ", total_tries / (len(bitstring) * 8))
-    return (current_prompt, token_map)
+    print("tokens_per_bit: ", tokens_per_bit)
+    return current_prompt
 
 
 def decode_bitstring(
-        encoded_message: str, initial_prompt: str, h, num_bits: int, token_map: list
+        llm: Llama,
+        encoded_message: str,
+        initial_prompt: str,
+        h,
+        num_bits: int,
+        tokens_per_bit: int
 ) -> tuple:
     """
-    Decodes a bitstring from the encoded LLM output using token information.
+    Decodes a bitstring from the encoded LLM output by re-tokenizing.
 
     Args:
+        llm (Llama): The language model for tokenization.
         encoded_message (str): The full message output from the LLM after encoding.
         initial_prompt (str): The prompt that was used to generate the message.
         h: The hash function used to encode/decode bits.
         num_bits (int): The number of bits to decode.
-        token_map (list): List of token ID sequences for each bit.
+        tokens_per_bit (int): Number of tokens used per bit during encoding.
 
     Returns:
         tuple: (decoded_bytes, decoded_string)
@@ -189,13 +189,23 @@ def decode_bitstring(
     if not encoded_message.startswith(initial_prompt):
         raise ValueError("Encoded message does not start with the initial prompt.")
 
+    # Get just the encoded portion
+    encoded_text = encoded_message[len(initial_prompt):]
+
+    # Re-tokenize the encoded text
+    all_tokens = llm.tokenize(encoded_text.encode('utf-8'))
+
     bits = []
 
     for i in range(num_bits):
-        if i >= len(token_map):
-            raise ValueError(f"Token map doesn't have enough entries for {num_bits} bits")
+        # Extract tokens for this bit
+        start_idx = i * tokens_per_bit
+        end_idx = start_idx + tokens_per_bit
 
-        tokens = token_map[i]
+        if end_idx > len(all_tokens):
+            raise ValueError(f"Not enough tokens in message for {num_bits} bits")
+
+        tokens = all_tokens[start_idx:end_idx]
 
         # Convert token IDs to bytes for hashing (same as in encoding)
         token_bytes = b''.join(str(tid).encode() for tid in tokens)
@@ -228,61 +238,6 @@ if __name__ == "__main__":
         default="The Alvarez hypothesis posits that the mass extinction of the dinosaurs and many other living things during the Cretaceous-Paleogene extinction event",
     )
 
-    ##############################
-
-    # Alice generates her private key
-    alice_private_key = x25519.X25519PrivateKey.generate()
-    alice_public_key = alice_private_key.public_key()
-
-    # Bob generates his private key
-    bob_private_key = x25519.X25519PrivateKey.generate()
-    bob_public_key = bob_private_key.public_key()
-
-    # Alice computes the shared secret using Bob's public key
-    alice_shared_secret = alice_private_key.exchange(bob_public_key)
-
-    # Bob computes the shared secret using Alice's public key
-    bob_shared_secret = bob_private_key.exchange(alice_public_key)
-
-    # Both shared secrets are identical
-    assert alice_shared_secret == bob_shared_secret
-
-    # Derive key using HKDF
-    kdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=b'prf-key',
-    )
-    prf_key = kdf.derive(alice_shared_secret)
-
-    print(f"PRF Key: {prf_key.hex()}")
-
-    # PRF evaluation at input 0 using HMAC-SHA256
-    # PRF(key, input) = HMAC-SHA256(key, input)
-    prf = hmac.HMAC(prf_key, hashes.SHA256())
-    prf.update(b'\x00')  # Input = 0 as a single byte
-    prf_output = prf.finalize()
-
-    print(f"PRF(key, 0): {prf_output.hex()}")
-    print(f"PRF output length: {len(prf_output)} bytes")
-
-    concatenated_key_prf_out = b''.join([prf_key, prf_output])
-
-    # Extract prf_key (first 32 bytes)
-    extracted_prf_key = concatenated_key_prf_out[:32]
-
-    # Extract prf_output (next 32 bytes)
-    extracted_prf_output = concatenated_key_prf_out[32:64]
-    # Or simply: concatenated[32:]
-
-    # Verify they match the originals
-    assert extracted_prf_key == prf_key
-    assert extracted_prf_output == prf_output
-    prf_i = hmac.HMAC(extracted_prf_key, hashes.SHA256())
-    prf_i.update(b'\x00')  # Input = 0 as a single byte
-    prf_output_i = prf_i.finalize()
-    assert extracted_prf_output == prf_output_i
 
     ###########################################
 
@@ -295,15 +250,17 @@ if __name__ == "__main__":
     bitstring = b"abc"
     print("bitstring type: ", type(bitstring))
 
-    # replacing test bitstring with the key and prf eval of 0
-    # bitstring = concatenated_key_prf_out
+    # replacing test bitstring with the elligator key exchange
+
+    bitstring = utils.gen_elligator_bitstring()
     print("new bitstring type: ", type(bitstring))
 
     print("message to encode: " + str(bitstring))
     print("length: ", len(bitstring))
 
-    tokens_per_bit_i = 16  # Changed from chars_per_bit_i
+    tokens_per_bit_i = 8  # Changed from chars_per_bit_i
     print("tokens_per_bit_i: ", tokens_per_bit_i)
+
 
     # llm = Llama(model_path=args.model_path, verbose=False, n_ctx=0, device="cuda:0")
     # llm = Llama(model_path=args.model_path, n_gpu_layers=-1, verbose=False, n_threads=8, n_batch=512, use_mmap=True,  use_mlock=False,)
@@ -316,17 +273,16 @@ if __name__ == "__main__":
         n_ctx=0,
         use_mmap=True,  # Good for large models
         use_mlock=False,  # Keep False to avoid memory issues
-        #logits_all=True,
-        device = "cuda:0",
+        # logits_all=True,
+        device="cuda:0",
     )
     print("model loaded")
 
     max_retries = 10
     message = None
-    token_map = None
     for attempt in range(max_retries):
         try:
-            (message, token_map) = encode_bitstring(llm, args.prompt, bitstring, h, tokens_per_bit_i)
+            message = encode_bitstring(llm, args.prompt, bitstring, h, tokens_per_bit_i)
             break  # Exit the loop if successful
         except SystemError as e:
             print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
@@ -339,11 +295,12 @@ if __name__ == "__main__":
     # --- Decode the message back ---
     num_bits = len(bitstring) * 8
     (decoded_bytes, decoded) = decode_bitstring(
+        llm,
         message,
         args.prompt,
         h,
         num_bits,
-        token_map  # Pass the token map instead of tokens_per_bit
+        tokens_per_bit_i
     )
     print("~~~~~~~\nDecoded message:\n~~~~~~~\n", decoded)
 
