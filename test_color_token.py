@@ -252,7 +252,8 @@ if __name__ == "__main__":
 
     # replacing test bitstring with the elligator key exchange
 
-    bitstring = utils.gen_elligator_bitstring()
+    # set this to 2
+    bitstring = utils.gen_elligator_bitstring(2)
     print("new bitstring type: ", type(bitstring))
 
     print("message to encode: " + str(bitstring))
