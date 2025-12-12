@@ -6,13 +6,13 @@ from typing import TypeVar
 
 import monocypher
 
-type ServerPublicKey = bytes
-type ServerSecretKey = bytes
-type SharedSecret = bytes
-type HiddenKey = bytes
-type Nonce = bytes
-type ClientMessage = bytes
-type Ciphertext = bytes
+ServerPublicKey = bytes
+ServerSecretKey = bytes
+SharedSecret = bytes
+HiddenKey = bytes
+Nonce = bytes
+ClientMessage = bytes
+Ciphertext = bytes
 
 
 class DecodeFlagFailure(Exception):
