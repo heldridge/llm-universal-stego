@@ -51,8 +51,11 @@ if __name__ == "__main__":
 
         elif apps == best[0]:
             others.append(combo)
-    print(best)
+    print("Best set of flag strings:", best)
+    print("Other as-good sets:")
     for c in others:
         print(c)
 
-    print(best[0] / 2 ** (args.p))
+    success_prob = best[0] / 2 ** (args.p)
+    print("Success probability:", success_prob)
+    print("Failure probability:", 1 - success_prob)
