@@ -19,6 +19,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache, Bits
 
 import timeit
 import utils
+from otc_scheme import keygen, otc_encode, otc_decode
 
 tokens_per_bit_i = 4
 max_attempts_param = 250
@@ -27,6 +28,7 @@ write_to_file = True
 LOG_OUTPUT_FILE = "bench.txt"
 MSG_OUTPUT_FILE = "msg.txt"
 CHUNCK_OUTPUT_FILE = "msg_chunks.txt"
+
 
 def replace_slashes(s: str) -> str:
     return s.replace("/", "_")
@@ -884,6 +886,12 @@ if __name__ == "__main__":
     parser.add_argument("--tokens-per-bit-arg", type=int, default=8, help="Tokens per bit argument")
     parser.add_argument("--target-output-tokens", type=int, default=None,
                         help="Target total number of output tokens (excluding prompt). If greater than needed for embedding, extra tokens are generated without bias.")
+    parser.add_argument("--otc-enable", action="store_true", help="Enable OTC keygen/encode/decode wrapper around embedded bytes")
+    parser.add_argument("--otc-key-hex", type=str, default=None, help="Hex-encoded OTC secret key. If omitted, a random key is generated")
+    parser.add_argument("--otc-key-bits", type=int, default=256, help="OTC key size in bits (>=128 and divisible by 8)")
+    parser.add_argument("--otc-mac-bytes", type=int, default=16, help="OTC truncated MAC size in bytes (8..32)")
+    parser.add_argument("--otc-rs-nsym", type=int, default=16, help="OTC Reed-Solomon parity symbols (2..128)")
+    parser.add_argument("--otc-length-field-bytes", type=int, default=2, help="OTC payload length field size (2 or 4 bytes)")
 
     args = parser.parse_args()
     #h = hashlib.sha256
@@ -903,6 +911,25 @@ if __name__ == "__main__":
     print("message to encode: " + str(bitstring))
     print("length:  ", len(bitstring))
     print("tokens_per_bit_i: ", tokens_per_bit_i)
+
+    encoded_payload = bitstring
+    otc_secret_key = None
+    if args.otc_enable:
+        if args.otc_key_hex:
+            otc_secret_key = bytes.fromhex(args.otc_key_hex)
+            if len(otc_secret_key) * 8 != args.otc_key_bits:
+                raise ValueError("Provided --otc-key-hex length does not match --otc-key-bits")
+        else:
+            otc_secret_key = keygen(args.otc_key_bits)
+        encoded_payload = otc_encode(
+            otc_secret_key,
+            bitstring,
+            mac_len_bytes=args.otc_mac_bytes,
+            rs_nsym=args.otc_rs_nsym,
+            length_field_bytes=args.otc_length_field_bytes,
+        )
+        print(f"OTC mode enabled: embedding {len(encoded_payload)} bytes from plaintext length {len(bitstring)}")
+        print(f"OTC key (hex): {otc_secret_key.hex()}")
 
     print(f"Loading model:  {args.model_path}")
 
@@ -991,7 +1018,7 @@ if __name__ == "__main__":
                 model,
                 tokenizer,
                 args.prompt,
-                bitstring,
+                encoded_payload,
                 h,
                 tokens_per_bit_i,
                 entropy_threshold=args.entropy_threshold,
@@ -1016,7 +1043,7 @@ if __name__ == "__main__":
 
     # --- Decode the message back (MODEL FREE) ---
     # Calculate how many bits we need to decode
-    num_bits = len(bitstring) * 8
+    num_bits = len(encoded_payload) * 8
 
     (decoded_bytes, decoded_string, valid_bits) = decode_bitstring(
         tokenizer,
@@ -1032,8 +1059,25 @@ if __name__ == "__main__":
     print("\n~~~~~~~\nDecoded bytes:\n~~~~~~~")
     print(decoded_bytes)
     print()
-    bits_to_embed = list(iter_bits(bitstring))
+    bits_to_embed = list(iter_bits(encoded_payload))
     decoded_bits_to_embed = list(iter_bits(decoded_bytes))
+
+    if args.otc_enable:
+        decoded_plaintext = otc_decode(
+            otc_secret_key,
+            decoded_bytes,
+            mac_len_bytes=args.otc_mac_bytes,
+            rs_nsym=args.otc_rs_nsym,
+            length_field_bytes=args.otc_length_field_bytes,
+        )
+        if decoded_plaintext is None:
+            print(term.red("✗ OTC verification failed (wrong key or tampered payload)."))
+            decoded_bytes = b""
+            decoded_string = ""
+        else:
+            decoded_bytes = decoded_plaintext
+            decoded_string = decoded_plaintext.decode(errors="replace")
+            print(term.green("✓ OTC verification succeeded."))
 
     if len(valid_bits) == num_bits:
         if decoded_bytes == bitstring:

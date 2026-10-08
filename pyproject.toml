@@ -10,5 +10,6 @@ dependencies = [
     "colorama>=0.4.6",
     "llama-cpp-python>=0.3.16",
     "pymonocypher>=4.0.2.5",
+    "reedsolo>=1.7.0",
     "transformers>=4.57.1",
 ]

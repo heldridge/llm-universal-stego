@@ -15,7 +15,7 @@ It embeds a hidden cryptographically generated bitstring into the text generated
 You will need Python 3.8+ and the following libraries:
 
 ```bash
-pip install torch transformers colorama blake3 numpy bitsandbytes accelerate
+pip install torch transformers colorama blake3 numpy bitsandbytes accelerate reedsolo
 
 Here is the complete `README.md` file content, including all sections.
 
@@ -38,7 +38,7 @@ This script demonstrates a method for steganography using Large Language Models 
 You will need Python 3.8+ and the following libraries:
 
 ```bash
-pip install torch transformers colorama blake3 numpy bitsandbytes accelerate
+pip install torch transformers colorama blake3 numpy bitsandbytes accelerate reedsolo
 
 ```
 
@@ -112,6 +112,17 @@ python mistralai/Mistral-7B-Instruct-v0.3 --tokens-per-bit-arg 4  --max-memory 7
 | Flag | Description |
 | --- | --- |
 | `--quiet`, `-q` | Suppress real-time terminal output (progress bars and generated tokens). |
+
+### Optional OTC Wrapper
+
+`test_embed_decode.py` now also supports an OTC-style authenticated encoding wrapper with configurable key size, MAC length, and Reed-Solomon redundancy:
+
+- `--otc-enable`
+- `--otc-key-hex`
+- `--otc-key-bits`
+- `--otc-mac-bytes`
+- `--otc-rs-nsym`
+- `--otc-length-field-bytes`
 
 ---
 
